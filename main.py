@@ -1,10 +1,28 @@
 
+import logging
+import re
 from typing import TypedDict
+
 from langgraph.graph import StateGraph, START, END
 from langchain_ollama import ChatOllama
 
 
-# 1. Define workflow state
+# -------------------------------------------------
+# 1. LOGGING CONFIGURATION
+# -------------------------------------------------
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(levelname)s: %(message)s"
+)
+
+logger = logging.getLogger(__name__)
+
+
+# -------------------------------------------------
+# 2. DEFINE TYPED SHARED WORKFLOW STATE
+# -------------------------------------------------
+
 class WorkflowState(TypedDict):
     topic: str
     evidence: str
@@ -15,74 +33,137 @@ class WorkflowState(TypedDict):
     status: str
 
 
-# 2. Connect to Ollama
+# -------------------------------------------------
+# 3. INITIALIZE OLLAMA MODEL
+# -------------------------------------------------
+
 llm = ChatOllama(
     model="llama3.2:3b",
     temperature=0
 )
 
 
-# Helper function to call the LLM
 def ask_llm(prompt: str) -> str:
+    """Send a prompt to Ollama and return its response."""
     response = llm.invoke(prompt)
     return response.content
 
 
-# 3. Researcher node
+# -------------------------------------------------
+# 4. RESEARCHER NODE
+# -------------------------------------------------
+
 def researcher(state: WorkflowState):
-    print("\n[LOG] Researcher node started")
+    logger.info("Researcher node started")
 
     evidence = ask_llm(
-        f"Research the following topic and provide useful facts, "
-        f"key points and evidence in simple language:\n{state['topic']}"
+        f"""
+        Act as a research assistant.
+
+        Research the following topic:
+        {state['topic']}
+
+        Provide:
+        1. Introduction
+        2. Important facts
+        3. Key findings
+        4. Examples
+        5. Reliable research points
+
+        Use simple and clear language.
+        """
     )
 
-    print("[LOG] Researcher node completed")
-    return {"evidence": evidence, "status": "Research completed"}
+    logger.info("Researcher node completed")
+
+    # Return only updated fields
+    return {
+        "evidence": evidence,
+        "status": "Research completed"
+    }
 
 
-# 4. Writer node
+# -------------------------------------------------
+# 5. WRITER NODE
+# -------------------------------------------------
+
 def writer(state: WorkflowState):
-    print("\n[LOG] Writer node started")
+    logger.info("Writer node started")
 
     draft = ask_llm(
-        f"Write a well-structured document about {state['topic']} "
-        f"using the following research.\n\n"
-        f"Research:\n{state['evidence']}\n\n"
-        f"Reviewer feedback from previous attempt:\n{state['feedback']}\n"
-        f"Write clearly with an introduction, headings and conclusion."
+        f"""
+        Act as a professional writer.
+
+        Topic: {state['topic']}
+
+        Research evidence:
+        {state['evidence']}
+
+        Previous reviewer feedback:
+        {state['feedback']}
+
+        Prepare a well-structured document containing:
+        1. Title
+        2. Introduction
+        3. Main discussion with headings
+        4. Examples
+        5. Conclusion
+
+        Use clear and simple language.
+        """
     )
 
-    print("[LOG] Writer node completed")
-    return {"draft": draft, "status": "Writing completed"}
+    logger.info("Writer node completed")
+
+    # Return only updated fields
+    return {
+        "draft": draft,
+        "status": "Writing completed"
+    }
 
 
-# 5. Reviewer node
+# -------------------------------------------------
+# 6. REVIEWER NODE
+# -------------------------------------------------
+
 def reviewer(state: WorkflowState):
-    print("\n[LOG] Reviewer node started")
+    logger.info("Reviewer node started")
 
     review = ask_llm(
-        f"Review the following document on {state['topic']}.\n\n"
-        f"Document:\n{state['draft']}\n\n"
-        "Give constructive feedback and a score out of 10.\n"
-        "Use this format:\n"
-        "Score: <number>/10\n"
-        "Feedback: <your feedback>"
+        f"""
+        Act as a professional document reviewer.
+
+        Topic: {state['topic']}
+
+        Document:
+        {state['draft']}
+
+        Evaluate the document for:
+        1. Accuracy
+        2. Clarity
+        3. Organization
+        4. Completeness
+
+        Give constructive feedback.
+
+        Your response MUST contain:
+        Score: X/10
+        Feedback: Your detailed feedback
+        """
     )
 
     # Extract score from review
-    score = 5
-    for line in review.splitlines():
-        if "score:" in line.lower():
-            try:
-                score = int(line.split(":")[1].split("/")[0].strip())
-                score = max(0, min(10, score))
-                break
-            except ValueError:
-                pass
+    match = re.search(r"Score\s*:\s*(\d+)\s*/\s*10", review, re.I)
 
-    print(f"[LOG] Reviewer node completed - Score: {score}/10")
+    if match:
+        score = max(0, min(10, int(match.group(1))))
+    else:
+        score = 0
+        logger.warning("Reviewer score could not be extracted")
 
+    logger.info("Reviewer node completed. Score: %d/10", score)
+
+    # Return only updated fields
     return {
         "feedback": review,
         "score": score,
@@ -91,13 +172,17 @@ def reviewer(state: WorkflowState):
     }
 
 
-# 6. Build the graph with fixed transitions
+# -------------------------------------------------
+# 7. BUILD LANGGRAPH WORKFLOW
+# -------------------------------------------------
+
 builder = StateGraph(WorkflowState)
 
 builder.add_node("researcher", researcher)
 builder.add_node("writer", writer)
 builder.add_node("reviewer", reviewer)
 
+# Fixed workflow transitions
 builder.add_edge(START, "researcher")
 builder.add_edge("researcher", "writer")
 builder.add_edge("writer", "reviewer")
@@ -106,24 +191,24 @@ builder.add_edge("reviewer", END)
 graph = builder.compile()
 
 
-# 7. Generate workflow diagram (Mermaid format)
-diagram = """graph TD
-    A([START]) --> B[Researcher]
-    B --> C[Writer]
-    C --> D[Reviewer]
-    D --> E([END])
-"""
+# -------------------------------------------------
+# 8. GENERATE WORKFLOW DIAGRAM
+# -------------------------------------------------
 
-with open("workflow.mmd", "w", encoding="utf-8") as f:
-    f.write(diagram)
+def generate_workflow_diagram():
+    diagram = graph.get_graph().draw_mermaid()
 
-print("[LOG] Workflow diagram saved as workflow.mmd")
+    with open("workflow.mmd", "w", encoding="utf-8") as file:
+        file.write(diagram)
+
+    logger.info("Workflow diagram saved as workflow.mmd")
 
 
-# 8. Execute the workflow
-if __name__ == "__main__":
-    topic = input("Enter a research topic: ")
+# -------------------------------------------------
+# 9. EXECUTE WORKFLOW
+# -------------------------------------------------
 
+def run_workflow(topic: str):
     initial_state: WorkflowState = {
         "topic": topic,
         "evidence": "",
@@ -134,25 +219,60 @@ if __name__ == "__main__":
         "status": "Started"
     }
 
-    print("\n[LOG] Workflow execution started")
+    logger.info("Workflow execution started")
 
     final_state = graph.invoke(initial_state)
 
-    # 9. Display final state
-    print("\n" + "=" * 50)
+    return final_state
+
+
+# -------------------------------------------------
+# 10. DISPLAY FINAL STATE AND SAVE DOCUMENT
+# -------------------------------------------------
+
+def display_result(final_state: WorkflowState):
+
+    print("\n" + "=" * 60)
     print("FINAL WORKFLOW STATE")
-    print("=" * 50)
+    print("=" * 60)
 
     for key, value in final_state.items():
         print(f"\n{key.upper()}:\n{value}")
 
-    # 10. Save generated document
-    with open("final_document.md", "w", encoding="utf-8") as f:
-        f.write(f"# {topic}\n\n")
-        f.write(final_state["draft"])
-        f.write("\n\n## Reviewer Feedback\n\n")
-        f.write(final_state["feedback"])
-        f.write(f"\n\n**Score:** {final_state['score']}/10\n")
+    print("\n" + "=" * 60)
+    print("FINAL GENERATED ANSWER")
+    print("=" * 60)
 
-    print("\n[LOG] Document saved as final_document.md")
-    print("[LOG] Workflow execution completed successfully")
+    print(final_state["draft"])
+
+    with open("final_document.md", "w", encoding="utf-8") as file:
+        file.write(f"# {final_state['topic']}\n\n")
+        file.write(final_state["draft"])
+        file.write("\n\n## Reviewer Feedback\n\n")
+        file.write(final_state["feedback"])
+        file.write(f"\n\n**Score:** {final_state['score']}/10\n")
+        file.write(f"\n**Review Count:** {final_state['review_count']}\n")
+
+    logger.info("Final document saved as final_document.md")
+    logger.info("Workflow execution completed successfully")
+
+
+# -------------------------------------------------
+# 11. MAIN PROGRAM
+# -------------------------------------------------
+
+if __name__ == "__main__":
+
+    generate_workflow_diagram()
+
+    topic = input("\nEnter a research topic: ").strip()
+
+    if not topic:
+        print("Please enter a valid research topic.")
+    else:
+        try:
+            final_state = run_workflow(topic)
+            display_result(final_state)
+
+        except Exception:
+            logger.exception("Workflow execution failed")
